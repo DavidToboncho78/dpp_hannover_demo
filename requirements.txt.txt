@@ -1,3 +1,0 @@
-streamlit
-paho-mqtt
-streamlit-autorefresh
