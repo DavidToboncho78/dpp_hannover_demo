@@ -1,0 +1,122 @@
+import streamlit as st
+import paho.mqtt.client as mqtt
+import json
+import threading
+from streamlit_autorefresh import st_autorefresh
+
+# ==========================================
+# 1. MOBILE PAGE CONFIGURATION
+# ==========================================
+# "centered" layout works best for mobile phones to prevent horizontal scrolling
+st.set_page_config(page_title="DPP Viewer", page_icon="🔋", layout="centered")
+
+# CSS Hacks to make it feel like a Native Mobile App
+st.markdown("""
+    <style>
+        /* Hide the default Streamlit top menu and footer */
+        #MainMenu {visibility: hidden;}
+        footer {visibility: hidden;}
+        header {visibility: hidden;}
+        
+        /* Reduce heavy top padding to save screen real estate on phones */
+        .block-container {
+            padding-top: 1.5rem;
+            padding-bottom: 1rem;
+        }
+        
+        /* Emphasize the metric values for readability on small screens */
+        [data-testid="stMetricValue"] {
+            font-size: 2rem;
+            color: #00ffaa; /* Catena-X / Green energy vibe */
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# ==========================================
+# 2. CLOUD MQTT SUBSCRIBER (Background Thread)
+# ==========================================
+if "live_dpp_data" not in st.session_state:
+    st.session_state.live_dpp_data = {
+        "voltage": 0.0,
+        "stateOfCharge": 0.0,
+        "stateOfHealth": 0.0,
+        "timestamp": "Waiting for edge connection..."
+    }
+
+@st.cache_resource
+def start_mqtt_subscriber():
+    def on_connect(client, userdata, flags, reason_code, properties):
+        print("Mobile Dashboard connected to HiveMQ!")
+        client.subscribe("catenax/dpp/demo/bms_telemetry")
+
+    def on_message(client, userdata, msg):
+        try:
+            payload = json.loads(msg.payload.decode())
+            dynamic_data = payload.get("dynamicData", {})
+            
+            # Update state with live booth data
+            st.session_state.live_dpp_data["voltage"] = dynamic_data.get("voltage", 0)
+            st.session_state.live_dpp_data["stateOfCharge"] = dynamic_data.get("stateOfCharge", 0)
+            st.session_state.live_dpp_data["stateOfHealth"] = dynamic_data.get("stateOfHealth", 0)
+            st.session_state.live_dpp_data["timestamp"] = payload.get("timestamp", "")
+        except Exception as e:
+            pass # Keep it silent on the app side
+
+    def run_subscriber():
+        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        client.on_connect = on_connect
+        client.on_message = on_message
+        client.connect("broker.hivemq.com", 1883, 60)
+        client.loop_forever()
+
+    thread = threading.Thread(target=run_subscriber, daemon=True)
+    thread.start()
+    return thread
+
+start_mqtt_subscriber()
+
+# ==========================================
+# 3. MOBILE HMI DASHBOARD (User Interface)
+# ==========================================
+
+# Auto-refresh the mobile browser every 2 seconds to catch your slider movements
+st_autorefresh(interval=2000, key="data_refresh")
+
+# Header Section
+st.title("🇪🇺 Digital Product Passport")
+st.caption("Live Catena-X Demo • Hannover Messe")
+
+# If you have an image, make sure it scales to the phone screen automatically
+try:
+    st.image('header.jpg', use_container_width=True)
+except Exception:
+    pass
+
+st.divider()
+
+# 🔋 DYNAMIC DATA (Top priority for the demo)
+st.subheader("Live Battery Condition")
+st.caption(f"Last updated: {st.session_state.live_dpp_data['timestamp']}")
+
+# On mobile, Streamlit automatically stacks columns vertically. 
+# We group them cleanly so they don't look squished on narrow screens.
+with st.container():
+    c1, c2 = st.columns(2)
+    c1.metric(label="⚡ Voltage", value=f"{st.session_state.live_dpp_data['voltage']} V")
+    c2.metric(label="🔋 Charge (SoC)", value=f"{st.session_state.live_dpp_data['stateOfCharge']} %")
+    
+    # Put Health on its own full-width line below the others for emphasis
+    st.metric(label="❤️ Health (SoH)", value=f"{st.session_state.live_dpp_data['stateOfHealth']} %")
+
+st.divider()
+
+# 📦 STATIC DATA (Collapsible to save mobile screen space)
+with st.expander("Manufacturing Data (PLM)", expanded=False):
+    st.markdown("**Manufacturer:** GreenEnergy EU")
+    st.markdown("**Battery Chemistry:** Lithium-Ion NMC")
+    st.markdown("**Asset ID:** EU240186EX2380002323")
+    st.markdown("**Nominal Capacity:** 75 kWh")
+    st.markdown("**Production Date:** 2025-11-12")
+    st.markdown("**Standard:** CEN/CENELEC JTC24")
+
+st.success("🟢 Connected to Edge Device")
